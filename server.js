@@ -1,25 +1,19 @@
 // ============================================
 // server.js - รันบน Render/VPS
-// เพิ่ม: รหัสลับ (secret key) + หน้าเว็บควบคุมจากมือถือ
+// มี: รหัสลับ + หน้าเว็บควบคุมมือถือ + คำสั่งเปิด Chrome ทุก profile (launch)
 // ============================================
 const http = require("http");
 const url = require("url");
 
 const PORT = process.env.PORT || 8787;
-
-// ---------- รหัสลับ ----------
-// ตั้งค่าผ่าน Environment Variable ชื่อ SECRET บน Render (แนะนำ)
-// ถ้าไม่ได้ตั้ง จะใช้ค่าเริ่มต้นด้านล่าง -- ควรเปลี่ยนเป็นของตัวเอง
 const SECRET = process.env.SECRET || "CHANGE_ME_1234";
 
-let current = { url: "", message: "", refreshVersion: 0 };
+let current = { url: "", message: "", refreshVersion: 0, launchVersion: 0 };
 
 function checkAuth(query, headers) {
-  // รับรหัสได้ทั้งจาก query (?key=...) และ header (x-secret)
   const key = (query && query.key) || (headers && headers["x-secret"]) || "";
   return key === SECRET;
 }
-
 function sendJson(res, code, obj) {
   res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(obj));
@@ -29,46 +23,26 @@ const server = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-secret");
-
-  if (req.method === "OPTIONS") {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
+  if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
   const parsed = url.parse(req.url, true);
   const path = parsed.pathname;
   const query = parsed.query;
 
-  // ---------- หน้าเว็บควบคุมจากมือถือ (เปิดที่ / ) ----------
   if (path === "/" && req.method === "GET") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(CONTROL_PAGE);
     return;
   }
+  if (path === "/ping") { sendJson(res, 200, { ok: true }); return; }
 
-  // ---------- ping: เช็คว่าเซิร์ฟเวอร์ทำงาน (ไม่ต้องใช้รหัส) ----------
-  if (path === "/ping") {
-    sendJson(res, 200, { ok: true });
-    return;
-  }
-
-  // ---------- get: Extension มาเช็คคำสั่ง (ต้องมีรหัส) ----------
   if (path === "/get" && req.method === "GET") {
-    if (!checkAuth(query, req.headers)) {
-      sendJson(res, 401, { error: "unauthorized" });
-      return;
-    }
+    if (!checkAuth(query, req.headers)) { sendJson(res, 401, { error: "unauthorized" }); return; }
     sendJson(res, 200, current);
     return;
   }
-
-  // ---------- set: ส่งลิงก์/ข้อความ (ต้องมีรหัส) ----------
   if (path === "/set" && req.method === "POST") {
-    if (!checkAuth(query, req.headers)) {
-      sendJson(res, 401, { error: "unauthorized" });
-      return;
-    }
+    if (!checkAuth(query, req.headers)) { sendJson(res, 401, { error: "unauthorized" }); return; }
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
@@ -77,21 +51,21 @@ const server = http.createServer((req, res) => {
         current.url = data.url || "";
         current.message = data.message || "";
         sendJson(res, 200, { ok: true });
-      } catch (e) {
-        sendJson(res, 400, { ok: false, error: "invalid json" });
-      }
+      } catch (e) { sendJson(res, 400, { ok: false, error: "invalid json" }); }
     });
     return;
   }
-
-  // ---------- refresh: สั่งรีเฟรชทุกแท็บ (ต้องมีรหัส) ----------
   if (path === "/refresh" && req.method === "POST") {
-    if (!checkAuth(query, req.headers)) {
-      sendJson(res, 401, { error: "unauthorized" });
-      return;
-    }
+    if (!checkAuth(query, req.headers)) { sendJson(res, 401, { error: "unauthorized" }); return; }
     current.refreshVersion = (current.refreshVersion || 0) + 1;
     sendJson(res, 200, { ok: true, refreshVersion: current.refreshVersion });
+    return;
+  }
+  // ---------- คำสั่งเปิด Chrome ทุก profile (ให้ Agent บนคอมรับไปทำ) ----------
+  if (path === "/launch" && req.method === "POST") {
+    if (!checkAuth(query, req.headers)) { sendJson(res, 401, { error: "unauthorized" }); return; }
+    current.launchVersion = (current.launchVersion || 0) + 1;
+    sendJson(res, 200, { ok: true, launchVersion: current.launchVersion });
     return;
   }
 
@@ -99,12 +73,8 @@ const server = http.createServer((req, res) => {
   res.end();
 });
 
-server.listen(PORT, () => {
-  console.log("Server ทำงานแล้วที่พอร์ต " + PORT);
-});
+server.listen(PORT, () => { console.log("Server ทำงานแล้วที่พอร์ต " + PORT); });
 
-// ============================================
-// หน้าเว็บควบคุมจากมือถือ (ฝังไว้ในเซิร์ฟเวอร์เลย)
 // ============================================
 const CONTROL_PAGE = `<!DOCTYPE html>
 <html lang="th">
@@ -115,11 +85,7 @@ const CONTROL_PAGE = `<!DOCTYPE html>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
-  body {
-    font-family: -apple-system, "Segoe UI", Tahoma, sans-serif;
-    max-width: 480px; margin: 0 auto; padding: 16px;
-    background: #f0f2f5; color: #050505;
-  }
+  body { font-family: -apple-system, "Segoe UI", Tahoma, sans-serif; max-width: 480px; margin: 0 auto; padding: 16px; background: #f0f2f5; color: #050505; }
   @media (prefers-color-scheme: dark) {
     body { background: #18191a; color: #e4e6eb; }
     input, textarea, .lib { background: #242526 !important; color: #e4e6eb !important; border-color: #3a3b3c !important; }
@@ -128,17 +94,12 @@ const CONTROL_PAGE = `<!DOCTYPE html>
   h2 { font-size: 18px; margin: 8px 0 16px; }
   .card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
   label { font-size: 13px; color: #65676b; display: block; margin-bottom: 4px; }
-  input, textarea {
-    width: 100%; padding: 10px; font-size: 15px; border: 1px solid #ccd0d5;
-    border-radius: 8px; margin-bottom: 12px; background: #fff;
-  }
+  input, textarea { width: 100%; padding: 10px; font-size: 15px; border: 1px solid #ccd0d5; border-radius: 8px; margin-bottom: 12px; background: #fff; }
   textarea { min-height: 70px; resize: vertical; }
-  button {
-    width: 100%; padding: 13px; font-size: 15px; font-weight: 600;
-    border: none; border-radius: 8px; cursor: pointer; margin-bottom: 8px;
-  }
+  button { width: 100%; padding: 13px; font-size: 15px; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; margin-bottom: 8px; }
   .primary { background: #1877f2; color: #fff; }
   .refresh { background: #42b72a; color: #fff; }
+  .launch { background: #f7b928; color: #050505; }
   .ghost { background: #e4e6eb; color: #050505; }
   #status { text-align: center; font-size: 14px; font-weight: 600; min-height: 20px; margin: 6px 0; }
   .ok { color: #42b72a; } .bad { color: #fa383e; }
@@ -156,6 +117,10 @@ const CONTROL_PAGE = `<!DOCTYPE html>
     <input type="password" id="secret" placeholder="ใส่รหัสลับ" />
     <div id="status">ใส่รหัสแล้วกดเช็ค</div>
     <button class="ghost" onclick="checkConn()">เช็คการเชื่อมต่อ</button>
+  </div>
+
+  <div class="card">
+    <button class="launch" onclick="launchAll()">💻 เปิด Chrome ทุก profile บนคอม</button>
   </div>
 
   <div class="card">
@@ -178,22 +143,15 @@ const CONTROL_PAGE = `<!DOCTYPE html>
 <script>
   const $ = (id) => document.getElementById(id);
   const statusEl = $("status");
-
-  // จำรหัส + คลังลิงก์ไว้ในเครื่อง (มือถือ) ผ่าน localStorage
-  try {
-    $("secret").value = localStorage.getItem("secret") || "";
-  } catch (e) {}
+  try { $("secret").value = localStorage.getItem("secret") || ""; } catch (e) {}
   let library = [];
   try { library = JSON.parse(localStorage.getItem("library") || "[]"); } catch (e) {}
 
-  function saveLibStore() {
-    try { localStorage.setItem("library", JSON.stringify(library)); } catch (e) {}
-  }
+  function saveLibStore() { try { localStorage.setItem("library", JSON.stringify(library)); } catch (e) {} }
   function renderLib() {
-    const box = $("lib");
-    box.innerHTML = "";
+    const box = $("lib"); box.innerHTML = "";
     if (library.length === 0) { box.innerHTML = '<div class="lib-item" style="color:#999">ยังไม่มีลิงก์ในคลัง</div>'; return; }
-    library.forEach((it, i) => {
+    library.forEach((it) => {
       const div = document.createElement("div");
       div.className = "lib-item";
       div.textContent = it.name ? (it.name + "  —  " + it.url) : it.url;
@@ -203,16 +161,10 @@ const CONTROL_PAGE = `<!DOCTYPE html>
   }
   renderLib();
 
-  function getSecret() {
-    const s = $("secret").value.trim();
-    try { localStorage.setItem("secret", s); } catch (e) {}
-    return s;
-  }
+  function getSecret() { const s = $("secret").value.trim(); try { localStorage.setItem("secret", s); } catch (e) {} return s; }
 
   async function checkConn() {
-    const s = getSecret();
-    statusEl.textContent = "กำลังเช็ค...";
-    statusEl.className = "";
+    const s = getSecret(); statusEl.textContent = "กำลังเช็ค..."; statusEl.className = "";
     try {
       const r = await fetch("/get?key=" + encodeURIComponent(s), { cache: "no-store" });
       if (r.ok) { statusEl.textContent = "✓ เชื่อมต่อ + รหัสถูกต้อง"; statusEl.className = "ok"; }
@@ -221,9 +173,18 @@ const CONTROL_PAGE = `<!DOCTYPE html>
     } catch (e) { statusEl.textContent = "✗ ต่อเซิร์ฟเวอร์ไม่ได้"; statusEl.className = "bad"; }
   }
 
-  async function sendAll() {
+  async function launchAll() {
     const s = getSecret();
-    const link = $("link").value.trim();
+    try {
+      const r = await fetch("/launch?key=" + encodeURIComponent(s), { method: "POST" });
+      if (r.ok) { statusEl.textContent = "✓ สั่งเปิด Chrome แล้ว (รอคอมทยอยเปิด)"; statusEl.className = "ok"; }
+      else if (r.status === 401) { statusEl.textContent = "✗ รหัสลับไม่ถูกต้อง"; statusEl.className = "bad"; }
+      else { statusEl.textContent = "✗ ไม่สำเร็จ"; statusEl.className = "bad"; }
+    } catch (e) { statusEl.textContent = "✗ ต่อเซิร์ฟเวอร์ไม่ได้"; statusEl.className = "bad"; }
+  }
+
+  async function sendAll() {
+    const s = getSecret(); const link = $("link").value.trim();
     if (!link) { statusEl.textContent = "ยังไม่ได้ใส่ลิงก์"; statusEl.className = "bad"; return; }
     try {
       const r = await fetch("/set?key=" + encodeURIComponent(s), {
@@ -247,14 +208,11 @@ const CONTROL_PAGE = `<!DOCTYPE html>
   }
 
   function saveLib() {
-    const link = $("link").value.trim();
-    const name = $("name").value.trim();
+    const link = $("link").value.trim(); const name = $("name").value.trim();
     if (!link) return;
     const idx = library.findIndex((x) => x.url === link);
-    if (idx >= 0) library[idx].name = name;
-    else library.push({ name, url: link });
-    saveLibStore();
-    renderLib();
+    if (idx >= 0) library[idx].name = name; else library.push({ name, url: link });
+    saveLibStore(); renderLib();
     statusEl.textContent = "✓ บันทึกลงคลังแล้ว"; statusEl.className = "ok";
   }
 </script>
